@@ -1,0 +1,434 @@
+import { Router, Request, Response } from 'express';
+import { z } from 'zod';
+import { validate } from '../middleware/validation';
+import { agentAuth } from '../middleware/auth';
+import { agentLimiter } from '../middleware/rateLimit';
+import * as jobService from '../services/jobService';
+import * as printerService from '../services/printerService';
+import * as stationService from '../services/stationService';
+import { auditService } from '../services/auditService';
+import { prisma } from '../config/database';
+
+const router = Router();
+
+const registerSchema = z.object({
+  agentId: z.string().min(1).max(100),
+  stationId: z.string().uuid(),
+  hostname: z.string().min(1),
+  platform: z.string().min(1),
+});
+
+const autoRegisterSchema = z.object({
+  agentId: z.string().min(1).max(100),
+  hostname: z.string().min(1),
+  platform: z.string().min(1),
+  printers: z.array(z.object({
+    name: z.string().min(1),
+    driver: z.string().optional(),
+    port: z.string().optional(),
+    adapterType: z.enum(['WINDOWS', 'CUPS', 'IPP', 'VIRTUAL']).default('WINDOWS'),
+  })).min(1),
+});
+
+const heartbeatSchema = z.object({
+  agentId: z.string().min(1).max(100),
+  stationId: z.string().uuid().optional(),
+  printers: z.array(z.object({
+    printerId: z.string().uuid(),
+    status: z.enum(['IDLE', 'PRINTING', 'PAUSED', 'ERROR', 'OFFLINE']),
+    paperStatus: z.enum(['UNKNOWN', 'OK', 'LOW', 'EMPTY']).optional(),
+    paperLevel: z.number().int().min(0).max(100).nullable().optional(),
+    tonerStatus: z.enum(['UNKNOWN', 'OK', 'LOW', 'EMPTY']).optional(),
+    tonerLevel: z.number().int().min(0).max(100).nullable().optional(),
+  })),
+});
+
+const jobStatusSchema = z.object({
+  agentId: z.string().min(1).max(100),
+  status: z.enum([
+    'CREATED', 'FILE_UPLOADED', 'PRICE_CALCULATED', 'AWAITING_PAYMENT',
+    'PAYMENT_PROCESSING', 'PAID', 'AUTHORIZED', 'QUEUED', 'PRINTING',
+    'COMPLETED', 'PRINT_FAILED', 'PRINTER_OFFLINE', 'PRINTER_ERROR',
+    'CANCELLED', 'REFUND_PENDING', 'REFUNDED',
+  ]),
+  errorMessage: z.string().optional(),
+});
+
+const printerStatusSchema = z.object({
+  status: z.enum(['IDLE', 'PRINTING', 'PAUSED', 'ERROR', 'OFFLINE']),
+  paperStatus: z.enum(['UNKNOWN', 'OK', 'LOW', 'EMPTY']).optional(),
+  paperLevel: z.number().int().min(0).max(100).nullable().optional(),
+  tonerStatus: z.enum(['UNKNOWN', 'OK', 'LOW', 'EMPTY']).optional(),
+  tonerLevel: z.number().int().min(0).max(100).nullable().optional(),
+});
+
+router.post('/register', agentAuth, agentLimiter, validate(registerSchema), async (req: Request, res: Response) => {
+  try {
+    const { agentId, stationId, hostname, platform } = req.body;
+
+    await auditService.log({
+      action: 'AGENT_REGISTERED',
+      entityType: 'Agent',
+      entityId: agentId,
+      details: { stationId, hostname, platform },
+      ipAddress: req.ip,
+    });
+
+    res.json({
+      success: true,
+      data: {
+        agentId,
+        stationId,
+        status: 'registered',
+        message: 'Agent registered successfully',
+      },
+    });
+  } catch (error) {
+    throw error;
+  }
+});
+
+router.post('/auto-register', agentAuth, agentLimiter, validate(autoRegisterSchema), async (req: Request, res: Response) => {
+  try {
+    const { agentId, hostname, platform, printers: detectedPrinters } = req.body;
+
+    const results = [];
+
+    for (const printer of detectedPrinters) {
+      const stationCode = `AGENT-${agentId}-${printer.name.replace(/[^a-zA-Z0-9]/g, '-').substring(0, 20)}`.toUpperCase();
+
+      let station = await prisma.station.findUnique({ where: { stationCode } });
+
+      if (!station) {
+        station = await prisma.station.create({
+          data: {
+            stationCode,
+            name: `${hostname} - ${printer.name}`,
+            location: hostname,
+            agentId,
+            hostname,
+            platform,
+          },
+        });
+
+        await prisma.printer.create({
+          data: {
+            name: printer.name,
+            stationId: station.id,
+            printerUri: printer.port || `virtual://${printer.name}`,
+            adapterType: printer.adapterType as any,
+            isOnline: true,
+            currentState: 'IDLE',
+          },
+        });
+
+        await auditService.log({
+          action: 'STATION_AUTO_CREATED',
+          entityType: 'Station',
+          entityId: station.id,
+          details: { stationCode, agentId, printerName: printer.name },
+          ipAddress: req.ip,
+        });
+      } else {
+        station = await prisma.station.update({
+          where: { id: station.id },
+          data: {
+            agentId,
+            hostname,
+            platform,
+            isActive: true,
+            updatedAt: new Date(),
+          },
+        });
+
+        const existingPrinter = await prisma.printer.findFirst({
+          where: { stationId: station.id, name: printer.name },
+        });
+
+        if (!existingPrinter) {
+          await prisma.printer.create({
+            data: {
+              name: printer.name,
+              stationId: station.id,
+              printerUri: printer.port || `virtual://${printer.name}`,
+              adapterType: printer.adapterType as any,
+              isOnline: true,
+              currentState: 'IDLE',
+            },
+          });
+        } else {
+          await prisma.printer.update({
+            where: { id: existingPrinter.id },
+            data: {
+              isOnline: true,
+              currentState: 'IDLE',
+              lastSeenAt: new Date(),
+            },
+          });
+        }
+      }
+
+      const printers = await prisma.printer.findMany({ where: { stationId: station.id } });
+
+      results.push({
+        stationId: station.id,
+        stationCode: station.stationCode,
+        name: station.name,
+        printerName: printer.name,
+        printers: printers.map(p => ({ id: p.id, name: p.name })),
+      });
+    }
+
+    res.json({
+      success: true,
+      data: {
+        agentId,
+        hostname,
+        stations: results,
+        message: `Registered ${results.length} station(s) successfully`,
+      },
+    });
+  } catch (error) {
+    throw error;
+  }
+});
+
+router.post('/heartbeat', agentAuth, agentLimiter, validate(heartbeatSchema), async (req: Request, res: Response) => {
+  try {
+    const { agentId, printers } = req.body;
+
+    for (const printerUpdate of printers) {
+      try {
+        await printerService.updatePrinterStatus(printerUpdate.printerId, {
+          isOnline: printerUpdate.status !== 'OFFLINE',
+          currentState: printerUpdate.status,
+          paperStatus: printerUpdate.paperStatus,
+          paperLevel: printerUpdate.paperLevel,
+          tonerStatus: printerUpdate.tonerStatus,
+          tonerLevel: printerUpdate.tonerLevel,
+        });
+      } catch (error) {
+        console.error(`Failed to update printer ${printerUpdate.printerId}:`, error);
+      }
+    }
+
+    res.json({
+      success: true,
+      data: {
+        agentId,
+        timestamp: new Date().toISOString(),
+        printersUpdated: printers.length,
+      },
+    });
+  } catch (error) {
+    throw error;
+  }
+});
+
+router.get('/jobs/poll', agentAuth, async (req: Request, res: Response) => {
+  try {
+    const limit = parseInt(req.query.limit as string) || 5;
+    const stationId = req.query.stationId as string | undefined;
+    const jobs = await jobService.getAuthorizedJobs(limit, stationId);
+    res.json({ success: true, data: jobs });
+  } catch (error) {
+    throw error;
+  }
+});
+
+router.get('/jobs/:agentId', agentAuth, async (req: Request, res: Response) => {
+  try {
+    const jobs = await jobService.getPendingJobsForAgent(req.params.agentId);
+    res.json({ success: true, data: jobs });
+  } catch (error) {
+    throw error;
+  }
+});
+
+router.post('/jobs/:jobId/claim', agentAuth, agentLimiter, async (req: Request, res: Response) => {
+  try {
+    const { authorizationToken } = req.body;
+    const agentId = req.headers['x-agent-id'] as string;
+    const job = await jobService.claimJob(req.params.jobId, authorizationToken, agentId, req.ip);
+    res.json({ success: true, data: job });
+  } catch (error) {
+    throw error;
+  }
+});
+
+router.post('/jobs/:jobId/complete', agentAuth, agentLimiter, async (req: Request, res: Response) => {
+  try {
+    const { status, pagesPrinted, errorMessage } = req.body;
+    const agentId = req.headers['x-agent-id'] as string;
+    const job = await jobService.completeJob(req.params.jobId, status, pagesPrinted, errorMessage, agentId, req.ip);
+    res.json({ success: true, data: job });
+  } catch (error) {
+    throw error;
+  }
+});
+
+router.post('/jobs/:jobId/status', agentAuth, agentLimiter, validate(jobStatusSchema), async (req: Request, res: Response) => {
+  try {
+    const job = await jobService.updateJobPrintStatus(
+      req.params.jobId,
+      req.body.status,
+      undefined,
+      req.body.errorMessage,
+      req.ip
+    );
+    res.json({ success: true, data: job });
+  } catch (error) {
+    throw error;
+  }
+});
+
+router.post('/printers/:printerId/status', agentAuth, agentLimiter, validate(printerStatusSchema), async (req: Request, res: Response) => {
+  try {
+    const printer = await printerService.updatePrinterStatus(req.params.printerId, {
+      isOnline: req.body.status !== 'OFFLINE',
+      currentState: req.body.status,
+      paperStatus: req.body.paperStatus,
+      paperLevel: req.body.paperLevel,
+      tonerStatus: req.body.tonerStatus,
+      tonerLevel: req.body.tonerLevel,
+    });
+    res.json({ success: true, data: printer });
+  } catch (error) {
+    throw error;
+  }
+});
+
+// Agent dashboard endpoints - scoped to the agent's own data
+
+router.get('/dashboard', agentAuth, async (req: Request, res: Response) => {
+  try {
+    const agentId = req.headers['x-agent-id'] as string;
+
+    // Find all stations registered by this agent
+    const stations = await prisma.station.findMany({
+      where: { agentId },
+      include: {
+        printers: true,
+        _count: { select: { jobs: true } },
+      },
+    }) as any[];
+
+    // Get job stats for this agent's stations
+    const stationIds = stations.map(s => s.id);
+    const [totalJobs, completedJobs, failedJobs, totalRevenue] = await Promise.all([
+      prisma.printJob.count({ where: { stationId: { in: stationIds } } }),
+      prisma.printJob.count({ where: { stationId: { in: stationIds }, printStatus: 'COMPLETED' } }),
+      prisma.printJob.count({ where: { stationId: { in: stationIds }, printStatus: { in: ['PRINT_FAILED', 'PRINTER_ERROR'] } } }),
+      prisma.paymentTransaction.aggregate({
+        where: { status: 'SUCCESS', job: { stationId: { in: stationIds } } },
+        _sum: { amount: true },
+      }),
+    ]);
+
+    // Recent jobs for this agent's stations
+    const recentJobs = await prisma.printJob.findMany({
+      where: { stationId: { in: stationIds } },
+      take: 20,
+      orderBy: { createdAt: 'desc' },
+      include: { station: true, printer: true },
+    });
+
+    res.json({
+      success: true,
+      data: {
+        agentId,
+        stations: stations.map(s => ({
+          id: s.id,
+          name: s.name,
+          hostname: s.hostname,
+          platform: s.platform,
+          isActive: s.isActive,
+          printerCount: s.printers.length,
+          jobCount: s._count.printJobs,
+          printers: s.printers.map((p: any) => ({
+            id: p.id,
+            name: p.name,
+            isOnline: p.isOnline,
+            currentState: p.currentState,
+            paperStatus: p.paperStatus,
+            paperLevel: p.paperLevel,
+            tonerStatus: p.tonerStatus,
+            tonerLevel: p.tonerLevel,
+          })),
+        })),
+        stats: {
+          totalJobs,
+          completedJobs,
+          failedJobs,
+          totalRevenue: totalRevenue._sum.amount || 0,
+          stationCount: stations.length,
+          printerCount: stations.reduce((acc, s) => acc + s.printers.length, 0),
+        },
+        recentJobs,
+      },
+    });
+  } catch (error) {
+    throw error;
+  }
+});
+
+router.get('/stations', agentAuth, async (req: Request, res: Response) => {
+  try {
+    const agentId = req.headers['x-agent-id'] as string;
+    const stations = await prisma.station.findMany({
+      where: { agentId },
+      include: { printers: true },
+    });
+    res.json({ success: true, data: stations });
+  } catch (error) {
+    throw error;
+  }
+});
+
+router.get('/printers', agentAuth, async (req: Request, res: Response) => {
+  try {
+    const agentId = req.headers['x-agent-id'] as string;
+    const stations = await prisma.station.findMany({ where: { agentId }, select: { id: true } });
+    const stationIds = stations.map(s => s.id);
+    const printers = await prisma.printer.findMany({
+      where: { stationId: { in: stationIds } },
+      include: { station: true },
+    });
+    res.json({ success: true, data: printers });
+  } catch (error) {
+    throw error;
+  }
+});
+
+router.get('/jobs', agentAuth, async (req: Request, res: Response) => {
+  try {
+    const agentId = req.headers['x-agent-id'] as string;
+    const page = parseInt(req.query.page as string) || 1;
+    const limit = parseInt(req.query.limit as string) || 20;
+    const skip = (page - 1) * limit;
+
+    const stations = await prisma.station.findMany({ where: { agentId }, select: { id: true } });
+    const stationIds = stations.map(s => s.id);
+
+    const [jobs, total] = await Promise.all([
+      prisma.printJob.findMany({
+        where: { stationId: { in: stationIds } },
+        include: { station: true, printer: true },
+        orderBy: { createdAt: 'desc' },
+        skip,
+        take: limit,
+      }),
+      prisma.printJob.count({ where: { stationId: { in: stationIds } } }),
+    ]);
+
+    res.json({
+      success: true,
+      data: jobs,
+      pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
+    });
+  } catch (error) {
+    throw error;
+  }
+});
+
+export default router;

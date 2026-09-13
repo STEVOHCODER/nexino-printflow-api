@@ -1,0 +1,128 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mongodb"
+  url      = env("DATABASE_URL")
+}
+
+model Station {
+  id          String   @id @default(uuid()) @db.ObjectId
+  stationCode String   @unique
+  name        String
+  location    String
+  isActive    Boolean  @default(true)
+  agentId     String?
+  hostname    String?
+  platform    String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  printers Printer[]
+  jobs     PrintJob[]
+  files    UploadedFile[]
+}
+
+model Printer {
+  id            String   @id @default(uuid()) @db.ObjectId
+  name          String
+  stationId     String   @db.ObjectId
+  printerUri    String
+  adapterType   String   @default("WINDOWS")
+  isOnline      Boolean  @default(false)
+  currentState  String   @default("OFFLINE")
+  paperStatus   String   @default("UNKNOWN")
+  paperLevel    Int?
+  tonerStatus   String   @default("UNKNOWN")
+  tonerLevel    Int?
+  lastSeenAt    DateTime?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  jobs PrintJob[]
+}
+
+model PrintJob {
+  id                 String   @id @default(cuid()) @db.ObjectId
+  jobId              String   @unique
+  stationId          String   @db.ObjectId
+  printerId          String?  @db.ObjectId
+  fileId             String   @db.ObjectId
+  originalFilename   String
+  pageCount          Int
+  pageRange          String?
+  copies             Int      @default(1)
+  colorMode          String   @default("BW")
+  paperSize          String   @default("A4")
+  duplex             Boolean  @default(false)
+  price              Int
+  currency           String   @default("RWF")
+  paymentStatus      String   @default("PENDING")
+  authorizationStatus String  @default("PENDING")
+  printStatus        String   @default("CREATED")
+  errorMessage       String?
+  paymentRef         String?
+  authorizationToken String   @unique
+  idempotencyKey     String   @unique
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+  startedAt          DateTime?
+  completedAt        DateTime?
+
+  payments PaymentTransaction[]
+}
+
+model UploadedFile {
+  id               String   @id @default(uuid()) @db.ObjectId
+  originalFilename String
+  storedFilename   String
+  mimeType         String
+  fileSize         Int
+  pageCount        Int
+  checksum         String
+  stationId        String   @db.ObjectId
+  createdAt        DateTime @default(now())
+  expiresAt        DateTime
+
+  jobs PrintJob[]
+}
+
+model PaymentTransaction {
+  id        String   @id @default(uuid()) @db.ObjectId
+  jobId     String   @db.ObjectId
+  provider  String   @default("MOCK")
+  reference String
+  amount    Int
+  currency  String   @default("RWF")
+  status    String   @default("PENDING")
+  metadata  Json?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model AuditLog {
+  id         String   @id @default(uuid()) @db.ObjectId
+  action     String
+  entityType String
+  entityId   String
+  details    Json?
+  ipAddress  String?
+  createdAt  DateTime @default(now())
+}
+
+model AdminUser {
+  id           String   @id @default(uuid()) @db.ObjectId
+  username     String   @unique
+  passwordHash String
+  role         String   @default("OPERATOR")
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+model SystemConfig {
+  id        String   @id @default(uuid()) @db.ObjectId
+  key       String   @unique
+  value     String
+  updatedAt DateTime @updatedAt
+}
