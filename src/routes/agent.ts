@@ -444,22 +444,24 @@ router.get('/download/:jobId', agentAuth, async (req: Request, res: Response) =>
       return;
     }
 
-    const cloudName = process.env.CLOUDINARY_CLOUD_NAME;
-    const apiKey = process.env.CLOUDINARY_API_KEY;
-    const apiSecret = process.env.CLOUDINARY_API_SECRET;
-    const timestamp = Math.floor(Date.now() / 1000);
-    const expiry = timestamp + 3600;
+    // Use Cloudinary SDK to generate a signed download URL
+    const cloudinary = require('cloudinary').v2;
+    
+    // Generate a signed URL for the raw file
+    const downloadUrl = cloudinary.url(job.file.storedFilename, {
+      resource_type: 'raw',
+      type: 'authenticated',
+      sign_url: true,
+      secure: true,
+      expires_at: Math.floor(Date.now() / 1000) + 3600, // 1 hour expiry
+    });
 
-    const signature = require('crypto')
-      .createHash('sha1')
-      .update(`timestamp=${expiry}${apiSecret}`)
-      .digest('hex');
-
-    const downloadUrl = `https://api.cloudinary.com/v1_1/${cloudName}/raw/download?public_id=${encodeURIComponent(job.file.storedFilename)}&timestamp=${timestamp}&signature=${signature}&api_key=${apiKey}`;
-
+    // Fetch the file from Cloudinary
     const response = await fetch(downloadUrl);
 
     if (!response.ok) {
+      const errorText = await response.text();
+      console.error('Cloudinary download failed:', response.status, errorText);
       res.status(502).json({ success: false, error: 'Failed to fetch file from storage' });
       return;
     }
@@ -467,28 +469,38 @@ router.get('/download/:jobId', agentAuth, async (req: Request, res: Response) =>
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename="${job.file.originalFilename}"`);
 
+    // Stream the response properly
     const body = response.body;
     if (body) {
-      const reader = (body as any).getReader?.() || null;
-      if (reader) {
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          res.write(value);
+      // Use Node.js stream pipeline
+      const { pipeline } = require('stream/promises');
+      const { Readable } = require('stream');
+      
+      // Convert the fetch response body to a Node.js readable stream
+      const nodeStream = new Readable({
+        async read() {
+          const reader = body.getReader();
+          try {
+            while (true) {
+              const { done, value } = await reader.read();
+              if (done) {
+                this.push(null);
+                break;
+              }
+              this.push(Buffer.from(value));
+            }
+          } catch (err) {
+            this.destroy(err);
+          }
         }
-        res.end();
-      } else {
-        const chunks: Uint8Array[] = [];
-        const iterable = body as AsyncIterable<Uint8Array>;
-        for await (const chunk of iterable) {
-          chunks.push(chunk);
-        }
-        res.send(Buffer.concat(chunks));
-      }
+      });
+
+      await pipeline(nodeStream, res);
     } else {
       res.status(502).json({ success: false, error: 'Empty response from storage' });
     }
   } catch (error) {
+    console.error('Download error:', error);
     throw error;
   }
 });
