@@ -8,7 +8,7 @@ datasource db {
 }
 
 model Station {
-  id          String   @id @default(uuid()) @db.ObjectId
+  id          String   @id @default(uuid()) @db.ObjectId @map("_id")
   stationCode String   @unique
   name        String
   location    String
@@ -22,10 +22,12 @@ model Station {
   printers Printer[]
   jobs     PrintJob[]
   files    UploadedFile[]
+
+  @@map("Station")
 }
 
 model Printer {
-  id            String   @id @default(uuid()) @db.ObjectId
+  id            String   @id @default(uuid()) @db.ObjectId @map("_id")
   name          String
   stationId     String   @db.ObjectId
   printerUri    String
@@ -40,41 +42,49 @@ model Printer {
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
-  jobs PrintJob[]
+  station Station   @relation(fields: [stationId], references: [id])
+  jobs    PrintJob[]
+
+  @@map("Printer")
 }
 
 model PrintJob {
-  id                 String   @id @default(cuid()) @db.ObjectId
-  jobId              String   @unique
-  stationId          String   @db.ObjectId
-  printerId          String?  @db.ObjectId
-  fileId             String   @db.ObjectId
-  originalFilename   String
-  pageCount          Int
-  pageRange          String?
-  copies             Int      @default(1)
-  colorMode          String   @default("BW")
-  paperSize          String   @default("A4")
-  duplex             Boolean  @default(false)
-  price              Int
-  currency           String   @default("RWF")
-  paymentStatus      String   @default("PENDING")
-  authorizationStatus String  @default("PENDING")
-  printStatus        String   @default("CREATED")
-  errorMessage       String?
-  paymentRef         String?
-  authorizationToken String   @unique
-  idempotencyKey     String   @unique
-  createdAt          DateTime @default(now())
-  updatedAt          DateTime @updatedAt
-  startedAt          DateTime?
-  completedAt        DateTime?
+  id                  String   @id @default(cuid()) @db.ObjectId @map("_id")
+  jobId               String   @unique
+  stationId           String   @db.ObjectId
+  printerId           String?  @db.ObjectId
+  fileId              String   @db.ObjectId
+  originalFilename    String
+  pageCount           Int
+  pageRange           String?
+  copies              Int      @default(1)
+  colorMode           String   @default("BW")
+  paperSize           String   @default("A4")
+  duplex              Boolean  @default(false)
+  price               Int
+  currency            String   @default("RWF")
+  paymentStatus       String   @default("PENDING")
+  authorizationStatus String   @default("PENDING")
+  printStatus         String   @default("CREATED")
+  errorMessage        String?
+  paymentRef          String?
+  authorizationToken  String   @unique
+  idempotencyKey      String   @unique
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+  startedAt           DateTime?
+  completedAt         DateTime?
 
+  station Station           @relation(fields: [stationId], references: [id])
+  printer Printer?          @relation(fields: [printerId], references: [id])
+  file    UploadedFile      @relation(fields: [fileId], references: [id])
   payments PaymentTransaction[]
+
+  @@map("PrintJob")
 }
 
 model UploadedFile {
-  id               String   @id @default(uuid()) @db.ObjectId
+  id               String   @id @default(uuid()) @db.ObjectId @map("_id")
   originalFilename String
   storedFilename   String
   mimeType         String
@@ -85,11 +95,14 @@ model UploadedFile {
   createdAt        DateTime @default(now())
   expiresAt        DateTime
 
-  jobs PrintJob[]
+  station Station   @relation(fields: [stationId], references: [id])
+  jobs    PrintJob[]
+
+  @@map("UploadedFile")
 }
 
 model PaymentTransaction {
-  id        String   @id @default(uuid()) @db.ObjectId
+  id        String   @id @default(uuid()) @db.ObjectId @map("_id")
   jobId     String   @db.ObjectId
   provider  String   @default("MOCK")
   reference String
@@ -99,30 +112,40 @@ model PaymentTransaction {
   metadata  Json?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  job PrintJob @relation(fields: [jobId], references: [id])
+
+  @@map("PaymentTransaction")
 }
 
 model AuditLog {
-  id         String   @id @default(uuid()) @db.ObjectId
+  id         String   @id @default(uuid()) @db.ObjectId @map("_id")
   action     String
   entityType String
   entityId   String
   details    Json?
   ipAddress  String?
   createdAt  DateTime @default(now())
+
+  @@map("AuditLog")
 }
 
 model AdminUser {
-  id           String   @id @default(uuid()) @db.ObjectId
+  id           String   @id @default(uuid()) @db.ObjectId @map("_id")
   username     String   @unique
   passwordHash String
   role         String   @default("OPERATOR")
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
+
+  @@map("AdminUser")
 }
 
 model SystemConfig {
-  id        String   @id @default(uuid()) @db.ObjectId
+  id        String   @id @default(uuid()) @db.ObjectId @map("_id")
   key       String   @unique
   value     String
   updatedAt DateTime @updatedAt
+
+  @@map("SystemConfig")
 }

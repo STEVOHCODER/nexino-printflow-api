@@ -2,10 +2,9 @@ import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
 import morgan from 'morgan';
-import path from 'path';
 import { config } from './config';
 import { generalLimiter } from './middleware/rateLimit';
-import { errorHandler, AppError } from './middleware/errorHandler';
+import { errorHandler } from './middleware/errorHandler';
 import prisma from './config/database';
 
 import stationsRouter from './routes/stations';
@@ -13,6 +12,7 @@ import printersRouter from './routes/printers';
 import jobsRouter from './routes/jobs';
 import agentRouter from './routes/agent';
 import adminRouter from './routes/admin';
+import { cleanupExpiredFiles, cleanupOldAuditLogs } from './services/cleanupService';
 
 const app = express();
 
@@ -45,6 +45,16 @@ app.use('/api/printers', printersRouter);
 app.use('/api/jobs', jobsRouter);
 app.use('/api/agent', agentRouter);
 app.use('/api/admin', adminRouter);
+
+app.get('/api/cron/cleanup', async (_req, res) => {
+  try {
+    await cleanupExpiredFiles();
+    await cleanupOldAuditLogs();
+    res.json({ success: true, message: 'Cleanup completed' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: 'Cleanup failed' });
+  }
+});
 
 app.use((_req, res, _next) => {
   res.status(404).json({
