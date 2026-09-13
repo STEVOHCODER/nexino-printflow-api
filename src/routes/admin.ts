@@ -12,6 +12,43 @@ import { PrintJobStatus } from '../types';
 
 const router = Router();
 
+router.get('/setup', async (_req: Request, res: Response) => {
+  try {
+    await prisma.$connect();
+    const ping = await prisma.$runCommandRaw({ ping: 1 });
+
+    const adminExists = await prisma.adminUser.findUnique({
+      where: { username: config.admin.username },
+    });
+
+    if (!adminExists) {
+      const passwordHash = await bcrypt.hash(config.admin.password, 12);
+      await prisma.adminUser.create({
+        data: {
+          username: config.admin.username,
+          passwordHash,
+          role: 'ADMIN',
+        },
+      });
+    }
+
+    res.json({
+      success: true,
+      data: {
+        mongoConnected: ping.ok === 1,
+        adminCreated: true,
+        dbUrl: process.env.DATABASE_URL?.replace(/:[^:@]+@/, ':***@'),
+      },
+    });
+  } catch (error: any) {
+    res.status(500).json({
+      success: false,
+      error: error.message,
+      code: error.code,
+    });
+  }
+});
+
 router.get('/network-info', (_req: Request, res: Response) => {
   const interfaces = os.networkInterfaces();
   const ips: string[] = [];
