@@ -474,4 +474,91 @@ router.delete('/alerts/:id', adminAuth, async (req: Request, res: Response) => {
   res.json({ success: true, data: { id: req.params.id, dismissed: true } });
 });
 
+const pricingSchema = z.object({
+  stationId: z.string().optional(),
+  bwPerPage: z.number().min(0),
+  colorPerPage: z.number().min(0),
+  paperA3: z.number().min(0).optional().default(1.5),
+  paperA5: z.number().min(0).optional().default(0.75),
+  duplexDiscount: z.number().min(0).max(1).optional().default(0.9),
+});
+
+router.get('/pricing', adminAuth, async (_req: Request, res: Response) => {
+  try {
+    const configs = await prisma.systemConfig.findMany({
+      where: { key: { startsWith: 'pricing_' } },
+    });
+    const pricing: Record<string, any> = {};
+    for (const c of configs) {
+      const stationId = c.key.replace('pricing_', '');
+      pricing[stationId] = JSON.parse(c.value);
+    }
+    res.json({ success: true, data: pricing });
+  } catch (error) {
+    throw error;
+  }
+});
+
+router.get('/pricing/:stationId', adminAuth, async (req: Request, res: Response) => {
+  try {
+    const config = await prisma.systemConfig.findUnique({
+      where: { key: `pricing_${req.params.stationId}` },
+    });
+    res.json({
+      success: true,
+      data: config ? JSON.parse(config.value) : {
+        bwPerPage: 100,
+        colorPerPage: 300,
+        paperA3: 1.5,
+        paperA5: 0.75,
+        duplexDiscount: 0.9,
+      },
+    });
+  } catch (error) {
+    throw error;
+  }
+});
+
+router.put('/pricing/:stationId', adminAuth, async (req: Request, res: Response) => {
+  try {
+    const data = pricingSchema.parse(req.body);
+    const value = JSON.stringify({
+      bwPerPage: data.bwPerPage,
+      colorPerPage: data.colorPerPage,
+      paperA3: data.paperA3,
+      paperA5: data.paperA5,
+      duplexDiscount: data.duplexDiscount,
+    });
+    await prisma.systemConfig.upsert({
+      where: { key: `pricing_${req.params.stationId}` },
+      update: { value, updatedAt: new Date() },
+      create: { key: `pricing_${req.params.stationId}`, value },
+    });
+    res.json({ success: true, data: { stationId: req.params.stationId, ...data } });
+  } catch (error) {
+    throw error;
+  }
+});
+
+router.put('/pricing-global', adminAuth, async (req: Request, res: Response) => {
+  try {
+    const data = pricingSchema.parse(req.body);
+    const value = JSON.stringify({
+      bwPerPage: data.bwPerPage,
+      colorPerPage: data.colorPerPage,
+      paperA3: data.paperA3,
+      paperA5: data.paperA5,
+      duplexDiscount: data.duplexDiscount,
+    });
+    await prisma.systemConfig.upsert({
+      where: { key: 'pricing_global' },
+      update: { value, updatedAt: new Date() },
+      create: { key: 'pricing_global', value },
+    });
+    res.json({ success: true, data });
+  } catch (error) {
+    throw error;
+  }
+});
+
 export default router;

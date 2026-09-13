@@ -33,9 +33,11 @@ const calculatePriceSchema = z.object({
   stationId: z.string().optional(),
   pageCount: z.number().int().min(1).max(500),
   copies: z.number().int().min(1).max(100).optional().default(1),
-  colorMode: z.enum(['BW', 'COLOR']).optional().default('BW'),
+  colorMode: z.enum(['BW', 'COLOR', 'MIXED']).optional().default('BW'),
   paperSize: z.enum(['A3', 'A4', 'A5', 'LETTER']).optional().default('A4'),
   duplex: z.boolean().optional().default(false),
+  colorPages: z.array(z.number()).optional(),
+  coverColor: z.boolean().optional(),
 });
 
 function parseMultipart(buffer: Buffer, boundary: string) {
@@ -151,8 +153,28 @@ router.post('/upload', uploadLimiter, asyncHandler(async (req: Request, res: Res
 
 router.post('/calculate-price', asyncHandler(async (req: Request, res: Response) => {
     const data = calculatePriceSchema.parse(req.body);
-    const price = calculatePrice(data.pageCount, data.colorMode, data.paperSize, data.copies, data.duplex);
-    res.json({ success: true, data: { price, currency: 'RWF' } });
+
+    let stationPricing = null;
+    if (data.stationId) {
+      const pricingConfig = await prisma.systemConfig.findUnique({ where: { key: `pricing_${data.stationId}` } });
+      if (pricingConfig) {
+        stationPricing = JSON.parse(pricingConfig.value);
+      }
+    }
+
+    const colorPages = data.colorMode === 'MIXED' ? (data.colorPages || []) : undefined;
+
+    const price = calculatePrice({
+      pageCount: data.pageCount,
+      copies: data.copies || 1,
+      colorMode: data.colorMode || 'BW',
+      paperSize: data.paperSize || 'A4',
+      duplex: data.duplex || false,
+      colorPages,
+      coverColor: data.coverColor,
+      stationPricing,
+    });
+    res.json({ success: true, data: price });
   })
 );
 
@@ -161,10 +183,9 @@ router.post('/', asyncHandler(async (req: Request, res: Response) => {
     const job = await jobService.createJob({
       stationId: data.stationId,
       fileId: data.fileId,
-      pageCount: req.body.pageCount || 1,
       copies: data.copies || 1,
-      colorMode: data.colorMode || 'BW',
-      paperSize: data.paperSize || 'A4',
+      colorMode: (data.colorMode || 'BW') as any,
+      paperSize: (data.paperSize || 'A4') as any,
       duplex: data.duplex || false,
       pageRange: data.pageRange,
       idempotencyKey: data.idempotencyKey || `job-${Date.now()}`,
@@ -176,14 +197,14 @@ router.post('/', asyncHandler(async (req: Request, res: Response) => {
 router.post('/:jobId/pay', paymentLimiter, asyncHandler(async (req: Request, res: Response) => {
     const { jobId } = req.params;
     const data = paymentSchema.parse(req.body);
-    const result = await jobService.processPayment(jobId, data.provider, data.reference, data.metadata);
+    const result = await jobService.processJobPayment(jobId, data.provider, data.reference, data.metadata);
     res.json({ success: true, data: result });
   })
 );
 
 router.get('/:jobId', asyncHandler(async (req: Request, res: Response) => {
     const { jobId } = req.params;
-    const job = await jobService.getJobWithDetails(jobId);
+    const job = await jobService.getJobById(jobId);
     if (!job) {
       res.status(404).json({ success: false, error: 'Job not found' });
       return;
