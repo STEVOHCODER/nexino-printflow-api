@@ -7,7 +7,7 @@ import * as jobService from '../services/jobService';
 import * as printerService from '../services/printerService';
 import * as stationService from '../services/stationService';
 import { auditService } from '../services/auditService';
-import { prisma } from '../config/database';
+import prisma from '../config/database';
 
 const router = Router();
 
@@ -175,7 +175,7 @@ router.post('/auto-register', agentAuth, agentLimiter, validate(autoRegisterSche
         stationCode: station.stationCode,
         name: station.name,
         printerName: printer.name,
-        printers: printers.map(p => ({ id: p.id, name: p.name })),
+        printers: printers.map((p: { id: string; name: string }) => ({ id: p.id, name: p.name })),
       });
     }
 
@@ -314,7 +314,7 @@ router.get('/dashboard', agentAuth, async (req: Request, res: Response) => {
     }) as any[];
 
     // Get job stats for this agent's stations
-    const stationIds = stations.map(s => s.id);
+    const stationIds = stations.map((s: { id: string }) => s.id);
     const [totalJobs, completedJobs, failedJobs, totalRevenue] = await Promise.all([
       prisma.printJob.count({ where: { stationId: { in: stationIds } } }),
       prisma.printJob.count({ where: { stationId: { in: stationIds }, printStatus: 'COMPLETED' } }),
@@ -389,7 +389,7 @@ router.get('/printers', agentAuth, async (req: Request, res: Response) => {
   try {
     const agentId = req.headers['x-agent-id'] as string;
     const stations = await prisma.station.findMany({ where: { agentId }, select: { id: true } });
-    const stationIds = stations.map(s => s.id);
+    const stationIds = stations.map((s: { id: string }) => s.id);
     const printers = await prisma.printer.findMany({
       where: { stationId: { in: stationIds } },
       include: { station: true },
@@ -408,7 +408,7 @@ router.get('/jobs', agentAuth, async (req: Request, res: Response) => {
     const skip = (page - 1) * limit;
 
     const stations = await prisma.station.findMany({ where: { agentId }, select: { id: true } });
-    const stationIds = stations.map(s => s.id);
+    const stationIds = stations.map((s: { id: string }) => s.id);
 
     const [jobs, total] = await Promise.all([
       prisma.printJob.findMany({
