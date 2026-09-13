@@ -444,20 +444,32 @@ router.get('/download/:jobId', agentAuth, async (req: Request, res: Response) =>
       return;
     }
 
-    // Use Cloudinary SDK to generate a signed download URL
-    const cloudinary = require('cloudinary').v2;
-    
-    // Generate a signed URL for the raw file
-    const downloadUrl = cloudinary.url(job.file.storedFilename, {
-      resource_type: 'raw',
-      type: 'authenticated',
-      sign_url: true,
-      secure: true,
-      expires_at: Math.floor(Date.now() / 1000) + 3600, // 1 hour expiry
-    });
+    const cloudName = process.env.CLOUDINARY_CLOUD_NAME;
+    const apiKey = process.env.CLOUDINARY_API_KEY;
+    const apiSecret = process.env.CLOUDINARY_API_SECRET;
+    const publicId = job.file.storedFilename;
+    const timestamp = Math.floor(Date.now() / 1000);
 
-    // Fetch the file from Cloudinary
-    const response = await fetch(downloadUrl);
+    const signature = require('crypto')
+      .createHash('sha1')
+      .update(`public_id=${publicId}&timestamp=${timestamp}${apiSecret}`)
+      .digest('hex');
+
+    const downloadUrl = `https://api.cloudinary.com/v1_1/${cloudName}/raw/download`;
+
+    const formData = new URLSearchParams();
+    formData.append('public_id', publicId);
+    formData.append('timestamp', timestamp.toString());
+    formData.append('signature', signature);
+    formData.append('api_key', apiKey!);
+
+    const response = await fetch(downloadUrl, {
+      method: 'POST',
+      body: formData,
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+    });
 
     if (!response.ok) {
       const errorText = await response.text();
@@ -466,17 +478,15 @@ router.get('/download/:jobId', agentAuth, async (req: Request, res: Response) =>
       return;
     }
 
-    res.setHeader('Content-Type', 'application/pdf');
+    const contentType = response.headers.get('content-type') || 'application/pdf';
+    res.setHeader('Content-Type', contentType);
     res.setHeader('Content-Disposition', `attachment; filename="${job.file.originalFilename}"`);
 
-    // Stream the response properly
     const body = response.body;
     if (body) {
-      // Use Node.js stream pipeline
       const { pipeline } = require('stream/promises');
       const { Readable } = require('stream');
-      
-      // Convert the fetch response body to a Node.js readable stream
+
       const nodeStream = new Readable({
         async read() {
           const reader = body.getReader();
