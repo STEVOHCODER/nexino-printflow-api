@@ -11,15 +11,17 @@ import { getDownloadUrl } from './fileService';
 export async function createJob(params: {
   fileId: string;
   stationId: string;
+  pageCount?: number;
   pageRange?: string;
   copies?: number;
-  colorMode?: ColorMode;
-  paperSize?: PaperSize;
+  colorMode?: string;
+  paperSize?: string;
   duplex?: boolean;
   idempotencyKey?: string;
   ipAddress?: string;
+  colorPages?: number[];
 }) {
-  const { fileId, stationId, pageRange, copies = 1, colorMode = ColorMode.BW, paperSize = PaperSize.A4, duplex = false, idempotencyKey, ipAddress } = params;
+  const { fileId, stationId, pageRange, copies = 1, colorMode = 'BW', paperSize = 'A4', duplex = false, idempotencyKey, ipAddress, pageCount: reqPageCount, colorPages } = params;
 
   if (idempotencyKey) {
     const existingJob = await prisma.printJob.findUnique({
@@ -47,7 +49,7 @@ export async function createJob(params: {
     throw new BadRequestError('Station is not active');
   }
 
-  let pageCount = file.pageCount;
+  let pageCount = reqPageCount || file.pageCount;
   if (pageRange) {
     const parsed = parsePageRange(pageRange, file.pageCount);
     pageCount = parsed.length;
@@ -56,9 +58,10 @@ export async function createJob(params: {
   const pricing = calculatePrice({
     pageCount,
     copies,
-    colorMode,
-    paperSize,
+    colorMode: colorMode as 'BW' | 'COLOR' | 'MIXED',
+    paperSize: paperSize as 'A3' | 'A4' | 'A5' | 'LETTER',
     duplex,
+    colorPages,
   });
 
   const jobId = generateJobId();

@@ -17,10 +17,12 @@ const createJobSchema = z.object({
   stationId: z.string(),
   pageRange: z.string().optional(),
   copies: z.number().int().min(1).max(100).optional(),
-  colorMode: z.enum(['BW', 'COLOR']).optional(),
+  colorMode: z.enum(['BW', 'COLOR', 'MIXED']).optional(),
   paperSize: z.enum(['A3', 'A4', 'A5', 'LETTER']).optional(),
   duplex: z.boolean().optional(),
   idempotencyKey: z.string().min(1).max(100).optional(),
+  pageCount: z.number().int().min(1).max(500).optional(),
+  colorPages: z.array(z.number()).optional(),
 });
 
 const paymentSchema = z.object({
@@ -183,11 +185,13 @@ router.post('/', asyncHandler(async (req: Request, res: Response) => {
     const job = await jobService.createJob({
       stationId: data.stationId,
       fileId: data.fileId,
+      pageCount: data.pageCount,
       copies: data.copies || 1,
       colorMode: (data.colorMode || 'BW') as any,
       paperSize: (data.paperSize || 'A4') as any,
       duplex: data.duplex || false,
       pageRange: data.pageRange,
+      colorPages: data.colorPages,
       idempotencyKey: data.idempotencyKey || `job-${Date.now()}`,
     });
     res.status(201).json({ success: true, data: job });
