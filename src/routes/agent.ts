@@ -445,16 +445,12 @@ router.get('/download/:jobId', agentAuth, async (req: Request, res: Response) =>
     }
 
     const fileRecord = job.file as any;
-    const directUrl = fileRecord.downloadUrl || fileRecord.secureUrl;
+    const { getSignedDownloadUrl } = require('../lib/cloudinary');
+    const downloadUrl = getSignedDownloadUrl(fileRecord.storedFilename);
 
-    if (!directUrl) {
-      res.status(404).json({ success: false, error: 'No download URL available for this file' });
-      return;
-    }
+    console.log(`Downloading file for job ${jobId} from signed URL`);
 
-    console.log(`Downloading file for job ${jobId} from: ${directUrl}`);
-
-    const response = await fetch(directUrl, { redirect: 'follow' });
+    const response = await fetch(downloadUrl, { redirect: 'follow' });
 
     if (!response.ok) {
       const errorText = await response.text();

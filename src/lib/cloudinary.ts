@@ -14,7 +14,7 @@ export async function uploadPDF(buffer: Buffer, filename: string): Promise<{ pub
         folder: 'nexino-uploads',
         public_id: filename,
         format: 'pdf',
-        access_mode: 'public',
+        type: 'private',
       },
       (error, result) => {
         if (error) reject(error);
@@ -30,10 +30,8 @@ export async function deletePDF(publicId: string): Promise<void> {
 }
 
 export function getSignedDownloadUrl(publicId: string): string {
-  return cloudinary.url(publicId, {
+  return cloudinary.utils.private_download_url(publicId, 'pdf', {
     resource_type: 'raw',
-    type: 'upload',
-    sign_url: true,
-    secure: true,
-  });
+    type: 'private',
+  }) as string;
 }
