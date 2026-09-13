@@ -14,6 +14,7 @@ export async function uploadPDF(buffer: Buffer, filename: string): Promise<{ pub
         folder: 'nexino-uploads',
         public_id: filename,
         format: 'pdf',
+        access_mode: 'public',
       },
       (error, result) => {
         if (error) reject(error);
