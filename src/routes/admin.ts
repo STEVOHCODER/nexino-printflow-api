@@ -280,6 +280,8 @@ router.get('/stations', adminAuth, async (req: Request, res: Response) => {
     const limit = parseInt(req.query.limit as string) || 50;
     const skip = (page - 1) * limit;
 
+    const staleThreshold = new Date(Date.now() - 2 * 60 * 1000);
+
     const [stations, total] = await Promise.all([
       prisma.station.findMany({
         include: {
@@ -292,6 +294,19 @@ router.get('/stations', adminAuth, async (req: Request, res: Response) => {
       }),
       prisma.station.count(),
     ]);
+
+    for (const station of stations) {
+      for (const printer of station.printers) {
+        if (printer.lastSeenAt && printer.lastSeenAt < staleThreshold) {
+          await prisma.printer.update({
+            where: { id: printer.id },
+            data: { isOnline: false, currentState: 'OFFLINE' },
+          });
+          printer.isOnline = false;
+          printer.currentState = 'OFFLINE';
+        }
+      }
+    }
 
     res.json({
       success: true,
