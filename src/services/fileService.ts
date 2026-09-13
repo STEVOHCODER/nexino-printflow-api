@@ -2,7 +2,7 @@ import { config } from '../config';
 import { generateChecksum } from '../utils/idGenerator';
 import { BadRequestError, NotFoundError } from '../middleware/errorHandler';
 import prisma from '../config/database';
-import { uploadPDF, deletePDF } from '../lib/cloudinary';
+import { uploadPDF, deletePDF, getSignedDownloadUrl } from '../lib/cloudinary';
 
 const ALLOWED_MIMES = ['application/pdf'];
 
@@ -92,11 +92,7 @@ export async function getFileById(fileId: string) {
 }
 
 export async function getDownloadUrl(storedFilename: string, downloadUrl?: string | null): Promise<string> {
-  if (downloadUrl) {
-    return downloadUrl;
-  }
-  const cloudName = process.env.CLOUDINARY_CLOUD_NAME;
-  return `https://res.cloudinary.com/${cloudName}/raw/upload/${storedFilename}.pdf`;
+  return getSignedDownloadUrl(storedFilename);
 }
 
 export async function deleteFile(storedFilename: string): Promise<void> {
