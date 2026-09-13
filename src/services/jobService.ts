@@ -430,8 +430,6 @@ export async function getAuthorizedJobs(limit: number = 5, stationId?: string) {
   }
 
 export async function claimJob(jobId: string, authorizationToken: string, agentId: string, ipAddress?: string) {
-    // Atomic claim: use a transaction with CAS (compare-and-swap) on printStatus
-    // This prevents two agents from claiming the same job
     const job = await prisma.printJob.findUnique({ where: { jobId } });
     if (!job) {
       throw new NotFoundError('Job', jobId);
@@ -441,25 +439,26 @@ export async function claimJob(jobId: string, authorizationToken: string, agentI
       throw new BadRequestError('Invalid authorization token');
     }
 
-    // Atomic update: only succeeds if status is still AUTHORIZED
-    const [updatedJob] = await prisma.$transaction([
-      prisma.printJob.updateMany({
-        where: {
-          id: job.id,
-          printStatus: PrintJobStatus.AUTHORIZED,  // CAS condition
-        },
-        data: {
-          printStatus: PrintJobStatus.QUEUED,
-          startedAt: new Date(),
-        },
-      }),
-      prisma.printJob.findUnique({ where: { id: job.id } }),
-    ]);
+    // Atomic claim: use updateMany with CAS condition (works on standalone MongoDB)
+    const updateResult = await prisma.printJob.updateMany({
+      where: {
+        id: job.id,
+        printStatus: PrintJobStatus.AUTHORIZED,
+      },
+      data: {
+        printStatus: PrintJobStatus.QUEUED,
+        startedAt: new Date(),
+      },
+    });
 
-    // Re-fetch to get the updated state
-    const result = await prisma.printJob.findUnique({ where: { id: job.id } });
-    if (!result || result.printStatus !== PrintJobStatus.QUEUED) {
-      throw new ConflictError('Job was already claimed by another agent');
+    // Verify the claim succeeded (updateMany returns count of affected rows)
+    if (updateResult.count === 0) {
+      // Re-check: was it already claimed or something else?
+      const current = await prisma.printJob.findUnique({ where: { id: job.id } });
+      if (!current || current.printStatus !== PrintJobStatus.QUEUED) {
+        throw new ConflictError('Job was already claimed by another agent');
+      }
+      // It was already claimed but is in QUEUED state - that's fine
     }
 
     // Assign printer
@@ -478,12 +477,12 @@ export async function claimJob(jobId: string, authorizationToken: string, agentI
       action: 'JOB_CLAIMED',
       entityType: 'PrintJob',
       entityId: job.id,
-    details: { jobId: job.jobId, agentId, printerId: printer?.id },
-    ipAddress,
-  });
+      details: { jobId: job.jobId, agentId, printerId: printer?.id },
+      ipAddress,
+    });
 
-  return updatedJob;
-}
+    return finalJob;
+  }
 
 export async function completeJob(
     jobId: string,
