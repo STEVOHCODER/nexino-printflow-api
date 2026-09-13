@@ -120,7 +120,7 @@ export async function getJobByJobId(jobId: string) {
 
   let downloadUrl: string | null = null;
   if (job.file) {
-    downloadUrl = await getDownloadUrl(job.file.storedFilename);
+    downloadUrl = await getDownloadUrl(job.file.storedFilename, (job.file as any).downloadUrl);
   }
 
   return {
@@ -420,7 +420,7 @@ export async function getAuthorizedJobs(limit: number = 5, stationId?: string) {
       jobs.map(async (job) => {
         let downloadUrl: string | null = null;
         if (job.file) {
-          downloadUrl = await getDownloadUrl(job.file.storedFilename);
+          downloadUrl = await getDownloadUrl(job.file.storedFilename, (job.file as any).downloadUrl);
         }
         return { ...job, downloadUrl };
       })

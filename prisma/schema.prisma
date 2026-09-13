@@ -87,6 +87,7 @@ model UploadedFile {
   id               String   @id @default(uuid()) @map("_id")
   originalFilename String
   storedFilename   String
+  downloadUrl      String?
   mimeType         String
   fileSize         Int
   pageCount        Int

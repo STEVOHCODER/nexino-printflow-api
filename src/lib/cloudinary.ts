@@ -29,14 +29,9 @@ export async function deletePDF(publicId: string): Promise<void> {
   await cloudinary.uploader.destroy(publicId, { resource_type: 'raw' });
 }
 
-export function getSignedURL(publicId: string, expiresIn = 86400): string {
-  return cloudinary.url(publicId, {
-    resource_type: 'raw',
-    type: 'upload',
-    secure: true,
-    sign_url: true,
-    expires_at: Math.floor(Date.now() / 1000) + expiresIn,
-  });
+export function getDownloadUrlById(publicId: string): string {
+  const cloudName = process.env.CLOUDINARY_CLOUD_NAME;
+  return `https://res.cloudinary.com/${cloudName}/raw/upload/${publicId}.pdf`;
 }
 
 export default cloudinary;

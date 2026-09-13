@@ -127,16 +127,17 @@ router.post('/upload', uploadLimiter, asyncHandler(async (req: Request, res: Res
     }
 
     const validation = await validateAndProcessBuffer(fileBuffer, originalFilename);
-    const storedFilename = await uploadToCloudinary(fileBuffer, originalFilename);
+    const { publicId, secureUrl } = await uploadToCloudinary(fileBuffer, originalFilename);
 
     const uploadedFile = await createUploadedFile(
       stationId,
       originalFilename,
-      storedFilename,
+      publicId,
       validation.mimeType,
       validation.fileSize,
       validation.pageCount,
-      validation.checksum
+      validation.checksum,
+      secureUrl
     );
 
     res.status(201).json({
@@ -213,7 +214,7 @@ router.get('/:jobId', asyncHandler(async (req: Request, res: Response) => {
       res.status(404).json({ success: false, error: 'Job not found' });
       return;
     }
-    const downloadUrl = job.file?.storedFilename ? await getDownloadUrl(job.file.storedFilename) : null;
+    const downloadUrl = job.file?.storedFilename ? await getDownloadUrl(job.file.storedFilename, (job.file as any).downloadUrl) : null;
     res.json({
       success: true,
       data: {

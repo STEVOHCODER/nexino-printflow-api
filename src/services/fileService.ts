@@ -2,7 +2,7 @@ import { config } from '../config';
 import { generateChecksum } from '../utils/idGenerator';
 import { BadRequestError, NotFoundError } from '../middleware/errorHandler';
 import prisma from '../config/database';
-import { uploadPDF, deletePDF, getSignedURL } from '../lib/cloudinary';
+import { uploadPDF, deletePDF } from '../lib/cloudinary';
 
 const ALLOWED_MIMES = ['application/pdf'];
 
@@ -47,12 +47,12 @@ function estimatePageCount(buffer: Buffer): number {
   return pageMatches ? Math.max(pageMatches.length, 1) : 1;
 }
 
-export async function uploadToCloudinary(buffer: Buffer, originalFilename: string): Promise<string> {
+export async function uploadToCloudinary(buffer: Buffer, originalFilename: string): Promise<{ publicId: string; secureUrl: string }> {
   const uniqueSuffix = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;
   const publicId = `nexino-${uniqueSuffix}`;
 
   const result = await uploadPDF(buffer, publicId);
-  return result.public_id;
+  return { publicId: result.public_id, secureUrl: result.secure_url };
 }
 
 export async function createUploadedFile(
@@ -62,7 +62,8 @@ export async function createUploadedFile(
   mimeType: string,
   fileSize: number,
   pageCount: number,
-  checksum: string
+  checksum: string,
+  downloadUrl?: string
 ) {
   const expiresAt = new Date();
   expiresAt.setHours(expiresAt.getHours() + config.retentionHours);
@@ -71,6 +72,7 @@ export async function createUploadedFile(
     data: {
       originalFilename,
       storedFilename,
+      downloadUrl: downloadUrl || null,
       mimeType,
       fileSize,
       pageCount,
@@ -89,8 +91,12 @@ export async function getFileById(fileId: string) {
   return file;
 }
 
-export async function getDownloadUrl(storedFilename: string): Promise<string> {
-  return getSignedURL(storedFilename);
+export async function getDownloadUrl(storedFilename: string, downloadUrl?: string | null): Promise<string> {
+  if (downloadUrl) {
+    return downloadUrl;
+  }
+  const cloudName = process.env.CLOUDINARY_CLOUD_NAME;
+  return `https://res.cloudinary.com/${cloudName}/raw/upload/${storedFilename}.pdf`;
 }
 
 export async function deleteFile(storedFilename: string): Promise<void> {
