@@ -1,5 +1,3 @@
-import fs from 'fs/promises';
-import * as pdfjsLib from 'pdfjs-dist/legacy/build/pdf.js';
 import { config } from '../config';
 import { generateChecksum } from '../utils/idGenerator';
 import { BadRequestError, NotFoundError } from '../middleware/errorHandler';
@@ -20,29 +18,33 @@ export async function validateAndProcessBuffer(buffer: Buffer, originalFilename:
     throw new BadRequestError('File is empty');
   }
 
-  let numPages: number;
-  try {
-    const loadingTask = pdfjsLib.getDocument({ data: new Uint8Array(buffer) });
-    const pdfDoc = await loadingTask.promise;
-    numPages = pdfDoc.numPages;
-  } catch {
-    throw new BadRequestError('Invalid or corrupted PDF file');
+  if (buffer.length > 50 * 1024 * 1024) {
+    throw new BadRequestError('File exceeds maximum size of 50MB');
   }
 
-  if (numPages === 0) {
-    throw new BadRequestError('PDF contains no pages');
+  const header = buffer.toString('latin1', 0, 5);
+  if (header !== '%PDF-') {
+    throw new BadRequestError('Invalid PDF file');
   }
 
-  if (numPages > 500) {
+  const pageCount = estimatePageCount(buffer);
+
+  if (pageCount > 500) {
     throw new BadRequestError('PDF exceeds maximum page limit of 500 pages');
   }
 
   return {
-    pageCount: numPages,
+    pageCount,
     fileSize: buffer.length,
     checksum,
     mimeType: 'application/pdf',
   };
+}
+
+function estimatePageCount(buffer: Buffer): number {
+  const content = buffer.toString('latin1');
+  const pageMatches = content.match(/\/Type\s*\/Page[^s]/g);
+  return pageMatches ? Math.max(pageMatches.length, 1) : 1;
 }
 
 export async function uploadToCloudinary(buffer: Buffer, originalFilename: string): Promise<string> {
