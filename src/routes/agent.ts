@@ -455,19 +455,14 @@ router.get('/download/:jobId', agentAuth, async (req: Request, res: Response) =>
       .update(`public_id=${publicId}&timestamp=${timestamp}${apiSecret}`)
       .digest('hex');
 
-    const downloadUrl = `https://api.cloudinary.com/v1_1/${cloudName}/raw/download`;
+    const downloadUrl = `https://api.cloudinary.com/v1_1/${cloudName}/raw/download?public_id=${encodeURIComponent(publicId)}&timestamp=${timestamp}&signature=${signature}&api_key=${apiKey}`;
 
-    const formData = new URLSearchParams();
-    formData.append('public_id', publicId);
-    formData.append('timestamp', timestamp.toString());
-    formData.append('signature', signature);
-    formData.append('api_key', apiKey!);
+    const authHeader = 'Basic ' + Buffer.from(`${apiKey}:${apiSecret}`).toString('base64');
 
     const response = await fetch(downloadUrl, {
-      method: 'POST',
-      body: formData,
+      method: 'GET',
       headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
+        'Authorization': authHeader,
       },
     });
 
