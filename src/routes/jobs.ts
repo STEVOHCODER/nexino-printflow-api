@@ -1,6 +1,5 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
-import { validate } from '../middleware/validation';
 import { stationAuth, optionalAuth, validateStationId } from '../middleware/auth';
 import { uploadLimiter, paymentLimiter } from '../middleware/rateLimit';
 import * as jobService from '../services/jobService';
@@ -14,8 +13,8 @@ const asyncHandler = (fn: (req: Request, res: Response, next: NextFunction) => P
 const router = Router();
 
 const createJobSchema = z.object({
-  fileId: z.string().uuid(),
-  stationId: z.string().uuid(),
+  fileId: z.string(),
+  stationId: z.string(),
   pageRange: z.string().optional(),
   copies: z.number().int().min(1).max(100).optional(),
   colorMode: z.enum(['BW', 'COLOR']).optional(),
@@ -31,6 +30,7 @@ const paymentSchema = z.object({
 });
 
 const calculatePriceSchema = z.object({
+  stationId: z.string().optional(),
   pageCount: z.number().int().min(1).max(500),
   copies: z.number().int().min(1).max(100).optional().default(1),
   colorMode: z.enum(['BW', 'COLOR']).optional().default('BW'),
@@ -38,13 +38,79 @@ const calculatePriceSchema = z.object({
   duplex: z.boolean().optional().default(false),
 });
 
+function parseMultipart(buffer: Buffer, boundary: string) {
+  const parts: { name: string; filename?: string; contentType?: string; data: Buffer }[] = [];
+  const boundaryBuffer = Buffer.from(`--${boundary}`);
+  let start = buffer.indexOf(boundaryBuffer) + boundaryBuffer.length + 2;
+
+  while (true) {
+    const end = buffer.indexOf(boundaryBuffer, start);
+    if (end === -1) break;
+
+    const partData = buffer.subarray(start, end - 2);
+    const headerEnd = partData.indexOf('\r\n\r\n');
+    if (headerEnd === -1) { start = end + boundaryBuffer.length + 2; continue; }
+
+    const headers = partData.subarray(0, headerEnd).toString();
+    const body = partData.subarray(headerEnd + 4);
+
+    const nameMatch = headers.match(/name="([^"]+)"/);
+    const filenameMatch = headers.match(/filename="([^"]+)"/);
+    const contentTypeMatch = headers.match(/Content-Type:\s*(.+)/i);
+
+    parts.push({
+      name: nameMatch?.[1] || '',
+      filename: filenameMatch?.[1],
+      contentType: contentTypeMatch?.[1]?.trim(),
+      data: body,
+    });
+
+    start = end + boundaryBuffer.length + 2;
+  }
+  return parts;
+}
+
 router.post('/upload', uploadLimiter, asyncHandler(async (req: Request, res: Response) => {
-    if (!req.body || !req.body.file) {
+    const contentType = req.headers['content-type'] || '';
+    let fileBuffer: Buffer;
+    let originalFilename = 'upload.pdf';
+    let stationId = '';
+
+    if (contentType.includes('multipart/form-data')) {
+      const boundaryMatch = contentType.match(/boundary=(.+)/);
+      if (!boundaryMatch) {
+        res.status(400).json({ success: false, error: 'Invalid multipart data' });
+        return;
+      }
+
+      const chunks: Buffer[] = [];
+      for await (const chunk of req) chunks.push(chunk);
+      const rawBuffer = Buffer.concat(chunks);
+
+      const parts = parseMultipart(rawBuffer, boundaryMatch[1]);
+      for (const part of parts) {
+        if (part.filename) {
+          fileBuffer = part.data;
+          originalFilename = part.filename;
+        } else if (part.name === 'stationId') {
+          stationId = part.data.toString().trim();
+        }
+      }
+    } else {
+      if (!req.body || !req.body.file) {
+        res.status(400).json({ success: false, error: 'No file provided' });
+        return;
+      }
+      fileBuffer = Buffer.from(req.body.file, 'base64');
+      originalFilename = req.body.filename || 'upload.pdf';
+      stationId = req.body.stationId;
+    }
+
+    if (!fileBuffer!) {
       res.status(400).json({ success: false, error: 'No file provided' });
       return;
     }
 
-    const stationId = req.body.stationId;
     if (!stationId) {
       res.status(400).json({ success: false, error: 'Station ID required' });
       return;
@@ -56,11 +122,7 @@ router.post('/upload', uploadLimiter, asyncHandler(async (req: Request, res: Res
       return;
     }
 
-    const fileBuffer = Buffer.from(req.body.file, 'base64');
-    const originalFilename = req.body.filename || 'upload.pdf';
-
     const validation = await validateAndProcessBuffer(fileBuffer, originalFilename);
-
     const storedFilename = await uploadToCloudinary(fileBuffer, originalFilename);
 
     const uploadedFile = await createUploadedFile(
@@ -78,74 +140,72 @@ router.post('/upload', uploadLimiter, asyncHandler(async (req: Request, res: Res
       data: {
         fileId: uploadedFile.id,
         originalFilename: uploadedFile.originalFilename,
-        pageCount: uploadedFile.pageCount,
-        fileSize: uploadedFile.fileSize,
         storedFilename: uploadedFile.storedFilename,
+        fileSize: uploadedFile.fileSize,
+        pageCount: uploadedFile.pageCount,
+        mimeType: uploadedFile.mimeType,
       },
     });
-}));
+  })
+);
 
-router.post('/download-url', asyncHandler(async (req: Request, res: Response) => {
-    const { storedFilename } = req.body;
-    if (!storedFilename) {
-      res.status(400).json({ success: false, error: 'storedFilename required' });
-      return;
-    }
-    const url = await getDownloadUrl(storedFilename);
-    res.json({ success: true, data: { url } });
-}));
+router.post('/calculate-price', asyncHandler(async (req: Request, res: Response) => {
+    const data = calculatePriceSchema.parse(req.body);
+    const price = calculatePrice(data.pageCount, data.colorMode, data.paperSize, data.copies, data.duplex);
+    res.json({ success: true, data: { price, currency: 'RWF' } });
+  })
+);
 
-router.post('/calculate-price', optionalAuth, validate(calculatePriceSchema), asyncHandler(async (req: Request, res: Response) => {
-    const pricing = calculatePrice(req.body);
-    res.json({ success: true, data: pricing });
-}));
-
-router.post('/', validate(createJobSchema), asyncHandler(async (req: Request, res: Response) => {
-    const { stationId } = req.body;
-    const station = await prisma.station.findUnique({ where: { id: stationId } });
-    if (!station || !station.isActive) {
-      res.status(404).json({ success: false, error: 'Station not found or inactive' });
-      return;
-    }
+router.post('/', asyncHandler(async (req: Request, res: Response) => {
+    const data = createJobSchema.parse(req.body);
     const job = await jobService.createJob({
-      ...req.body,
-      ipAddress: req.ip,
+      stationId: data.stationId,
+      fileId: data.fileId,
+      pageCount: req.body.pageCount || 1,
+      copies: data.copies || 1,
+      colorMode: data.colorMode || 'BW',
+      paperSize: data.paperSize || 'A4',
+      duplex: data.duplex || false,
+      pageRange: data.pageRange,
+      idempotencyKey: data.idempotencyKey || `job-${Date.now()}`,
     });
     res.status(201).json({ success: true, data: job });
-}));
+  })
+);
+
+router.post('/:jobId/pay', paymentLimiter, asyncHandler(async (req: Request, res: Response) => {
+    const { jobId } = req.params;
+    const data = paymentSchema.parse(req.body);
+    const result = await jobService.processPayment(jobId, data.provider, data.reference, data.metadata);
+    res.json({ success: true, data: result });
+  })
+);
 
 router.get('/:jobId', asyncHandler(async (req: Request, res: Response) => {
-    const job = await jobService.getJobByJobId(req.params.jobId);
-    res.json({ success: true, data: job });
-}));
-
-router.post('/:jobId/pay', paymentLimiter, validate(paymentSchema), asyncHandler(async (req: Request, res: Response) => {
-    const result = await jobService.processJobPayment(
-      req.params.jobId,
-      req.body.provider,
-      req.body.reference,
-      req.body.metadata,
-      req.ip
-    );
-
-    if (result.success) {
-      res.json({ success: true, data: result.job });
-    } else {
-      res.status(402).json({ success: false, error: result.error });
+    const { jobId } = req.params;
+    const job = await jobService.getJobWithDetails(jobId);
+    if (!job) {
+      res.status(404).json({ success: false, error: 'Job not found' });
+      return;
     }
-}));
+    const downloadUrl = job.file?.storedFilename ? await getDownloadUrl(job.file.storedFilename) : null;
+    res.json({
+      success: true,
+      data: {
+        ...job,
+        downloadUrl,
+        job: undefined,
+        file: job.file ? { ...job.file, downloadUrl } : undefined,
+      },
+    });
+  })
+);
 
 router.post('/:jobId/cancel', asyncHandler(async (req: Request, res: Response) => {
-    const job = await jobService.cancelJob(req.params.jobId, req.ip);
+    const { jobId } = req.params;
+    const job = await jobService.cancelJob(jobId);
     res.json({ success: true, data: job });
-}));
-
-router.get('/station/:stationId', stationAuth, asyncHandler(async (req: Request, res: Response) => {
-    const page = parseInt(req.query.page as string) || 1;
-    const limit = parseInt(req.query.limit as string) || 20;
-
-    const result = await jobService.listJobsForStation(req.params.stationId, page, limit);
-    res.json({ success: true, data: result.jobs, pagination: result.pagination });
-}));
+  })
+);
 
 export default router;
