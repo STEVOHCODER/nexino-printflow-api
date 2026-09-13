@@ -444,31 +444,21 @@ router.get('/download/:jobId', agentAuth, async (req: Request, res: Response) =>
       return;
     }
 
-    const cloudName = process.env.CLOUDINARY_CLOUD_NAME;
-    const apiKey = process.env.CLOUDINARY_API_KEY;
-    const apiSecret = process.env.CLOUDINARY_API_SECRET;
-    const publicId = job.file.storedFilename;
-    const timestamp = Math.floor(Date.now() / 1000);
+    const fileRecord = job.file as any;
+    const directUrl = fileRecord.downloadUrl || fileRecord.secureUrl;
 
-    const signature = require('crypto')
-      .createHash('sha1')
-      .update(`public_id=${publicId}&timestamp=${timestamp}${apiSecret}`)
-      .digest('hex');
+    if (!directUrl) {
+      res.status(404).json({ success: false, error: 'No download URL available for this file' });
+      return;
+    }
 
-    const downloadUrl = `https://api.cloudinary.com/v1_1/${cloudName}/raw/download?public_id=${encodeURIComponent(publicId)}&timestamp=${timestamp}&signature=${signature}&api_key=${apiKey}`;
+    console.log(`Downloading file for job ${jobId} from: ${directUrl}`);
 
-    const authHeader = 'Basic ' + Buffer.from(`${apiKey}:${apiSecret}`).toString('base64');
-
-    const response = await fetch(downloadUrl, {
-      method: 'GET',
-      headers: {
-        'Authorization': authHeader,
-      },
-    });
+    const response = await fetch(directUrl, { redirect: 'follow' });
 
     if (!response.ok) {
       const errorText = await response.text();
-      console.error('Cloudinary download failed:', response.status, errorText);
+      console.error('File download failed:', response.status, errorText);
       res.status(502).json({ success: false, error: 'Failed to fetch file from storage' });
       return;
     }

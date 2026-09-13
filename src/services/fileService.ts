@@ -92,6 +92,9 @@ export async function getFileById(fileId: string) {
 }
 
 export async function getDownloadUrl(storedFilename: string, downloadUrl?: string | null): Promise<string> {
+  if (downloadUrl) {
+    return downloadUrl;
+  }
   return getSignedDownloadUrl(storedFilename);
 }
 
