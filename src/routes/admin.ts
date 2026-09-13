@@ -37,15 +37,38 @@ router.get('/setup', async (_req: Request, res: Response) => {
       data: {
         mongoConnected: ping.ok === 1,
         adminCreated: true,
-        dbUrl: process.env.DATABASE_URL?.replace(/:[^:@]+@/, ':***@'),
       },
     });
   } catch (error: any) {
     res.status(500).json({
       success: false,
       error: error.message,
-      code: error.code,
     });
+  }
+});
+
+router.get('/debug-login', async (req: Request, res: Response) => {
+  try {
+    const username = (req.query.username as string) || 'admin';
+    const password = (req.query.password as string) || 'admin123';
+
+    const admin = await prisma.adminUser.findUnique({ where: { username } });
+    if (!admin) {
+      return res.json({ success: false, error: 'Admin not found', username });
+    }
+
+    const isValid = await bcrypt.compare(password, admin.passwordHash);
+    return res.json({
+      success: true,
+      data: {
+        username: admin.username,
+        role: admin.role,
+        passwordValid: isValid,
+        hashPrefix: admin.passwordHash.substring(0, 10),
+      },
+    });
+  } catch (error: any) {
+    return res.status(500).json({ success: false, error: error.message });
   }
 });
 
