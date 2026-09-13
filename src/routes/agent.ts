@@ -431,4 +431,66 @@ router.get('/jobs', agentAuth, async (req: Request, res: Response) => {
   }
 });
 
+router.get('/download/:jobId', agentAuth, async (req: Request, res: Response) => {
+  try {
+    const { jobId } = req.params;
+    const job = await prisma.printJob.findUnique({
+      where: { jobId },
+      include: { file: true },
+    });
+
+    if (!job || !job.file) {
+      res.status(404).json({ success: false, error: 'Job or file not found' });
+      return;
+    }
+
+    const cloudName = process.env.CLOUDINARY_CLOUD_NAME;
+    const apiKey = process.env.CLOUDINARY_API_KEY;
+    const apiSecret = process.env.CLOUDINARY_API_SECRET;
+    const timestamp = Math.floor(Date.now() / 1000);
+    const expiry = timestamp + 3600;
+
+    const signature = require('crypto')
+      .createHash('sha1')
+      .update(`timestamp=${expiry}${apiSecret}`)
+      .digest('hex');
+
+    const downloadUrl = `https://api.cloudinary.com/v1_1/${cloudName}/raw/download?public_id=${encodeURIComponent(job.file.storedFilename)}&timestamp=${timestamp}&signature=${signature}&api_key=${apiKey}`;
+
+    const response = await fetch(downloadUrl);
+
+    if (!response.ok) {
+      res.status(502).json({ success: false, error: 'Failed to fetch file from storage' });
+      return;
+    }
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${job.file.originalFilename}"`);
+
+    const body = response.body;
+    if (body) {
+      const reader = (body as any).getReader?.() || null;
+      if (reader) {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          res.write(value);
+        }
+        res.end();
+      } else {
+        const chunks: Uint8Array[] = [];
+        const iterable = body as AsyncIterable<Uint8Array>;
+        for await (const chunk of iterable) {
+          chunks.push(chunk);
+        }
+        res.send(Buffer.concat(chunks));
+      }
+    } else {
+      res.status(502).json({ success: false, error: 'Empty response from storage' });
+    }
+  } catch (error) {
+    throw error;
+  }
+});
+
 export default router;
