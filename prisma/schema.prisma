@@ -8,7 +8,7 @@ datasource db {
 }
 
 model Station {
-  id          String   @id @default(uuid()) @db.ObjectId @map("_id")
+  id          String   @id @default(uuid()) @map("_id")
   stationCode String   @unique
   name        String
   location    String
@@ -27,9 +27,9 @@ model Station {
 }
 
 model Printer {
-  id            String   @id @default(uuid()) @db.ObjectId @map("_id")
+  id            String   @id @default(uuid()) @map("_id")
   name          String
-  stationId     String   @db.ObjectId
+  stationId     String
   printerUri    String
   adapterType   String   @default("WINDOWS")
   isOnline      Boolean  @default(false)
@@ -49,11 +49,11 @@ model Printer {
 }
 
 model PrintJob {
-  id                  String   @id @default(cuid()) @db.ObjectId @map("_id")
+  id                  String   @id @default(cuid()) @map("_id")
   jobId               String   @unique
-  stationId           String   @db.ObjectId
-  printerId           String?  @db.ObjectId
-  fileId              String   @db.ObjectId
+  stationId           String
+  printerId           String?
+  fileId              String
   originalFilename    String
   pageCount           Int
   pageRange           String?
@@ -84,14 +84,14 @@ model PrintJob {
 }
 
 model UploadedFile {
-  id               String   @id @default(uuid()) @db.ObjectId @map("_id")
+  id               String   @id @default(uuid()) @map("_id")
   originalFilename String
   storedFilename   String
   mimeType         String
   fileSize         Int
   pageCount        Int
   checksum         String
-  stationId        String   @db.ObjectId
+  stationId        String
   createdAt        DateTime @default(now())
   expiresAt        DateTime
 
@@ -102,8 +102,8 @@ model UploadedFile {
 }
 
 model PaymentTransaction {
-  id        String   @id @default(uuid()) @db.ObjectId @map("_id")
-  jobId     String   @db.ObjectId
+  id        String   @id @default(uuid()) @map("_id")
+  jobId     String
   provider  String   @default("MOCK")
   reference String
   amount    Int
@@ -119,7 +119,7 @@ model PaymentTransaction {
 }
 
 model AuditLog {
-  id         String   @id @default(uuid()) @db.ObjectId @map("_id")
+  id         String   @id @default(uuid()) @map("_id")
   action     String
   entityType String
   entityId   String
@@ -131,7 +131,7 @@ model AuditLog {
 }
 
 model AdminUser {
-  id           String   @id @default(uuid()) @db.ObjectId @map("_id")
+  id           String   @id @default(uuid()) @map("_id")
   username     String   @unique
   passwordHash String
   role         String   @default("OPERATOR")
@@ -142,7 +142,7 @@ model AdminUser {
 }
 
 model SystemConfig {
-  id        String   @id @default(uuid()) @db.ObjectId @map("_id")
+  id        String   @id @default(uuid()) @map("_id")
   key       String   @unique
   value     String
   updatedAt DateTime @updatedAt
