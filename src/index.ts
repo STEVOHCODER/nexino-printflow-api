@@ -12,7 +12,7 @@ import printersRouter from './routes/printers';
 import jobsRouter from './routes/jobs';
 import agentRouter from './routes/agent';
 import adminRouter from './routes/admin';
-import { cleanupExpiredFiles, cleanupOldAuditLogs } from './services/cleanupService';
+import { cleanupExpiredFiles, cleanupOldAuditLogs, cleanupStuckJobs, cleanupOfflineStations } from './services/cleanupService';
 
 const app = express();
 
@@ -50,6 +50,8 @@ app.get('/api/cron/cleanup', async (_req, res) => {
   try {
     await cleanupExpiredFiles();
     await cleanupOldAuditLogs();
+    await cleanupStuckJobs();
+    await cleanupOfflineStations();
     res.json({ success: true, message: 'Cleanup completed' });
   } catch (error) {
     res.status(500).json({ success: false, error: 'Cleanup failed' });

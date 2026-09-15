@@ -8,16 +8,18 @@ datasource db {
 }
 
 model Station {
-  id          String   @id @default(uuid()) @map("_id")
-  stationCode String   @unique
-  name        String
-  location    String
-  isActive    Boolean  @default(true)
-  agentId     String?
-  hostname    String?
-  platform    String?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id              String    @id @default(uuid()) @map("_id")
+  stationCode     String    @unique
+  name            String
+  location        String
+  isActive        Boolean   @default(true)
+  agentId         String?
+  hostname        String?
+  platform        String?
+  lastHeartbeatAt DateTime?
+  isReady         Boolean   @default(false)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
 
   printers Printer[]
   jobs     PrintJob[]

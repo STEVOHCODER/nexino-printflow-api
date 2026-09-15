@@ -496,4 +496,107 @@ router.get('/download/:jobId', agentAuth, async (req: Request, res: Response) =>
   }
 });
 
+// Pre-payment readiness: agent reports station hardware status
+const stationReadySchema = z.object({
+  stationId: z.string().uuid(),
+  isReady: z.boolean(),
+  printerStatus: z.object({
+    status: z.enum(['IDLE', 'PRINTING', 'PAUSED', 'ERROR', 'OFFLINE']),
+    paperStatus: z.enum(['UNKNOWN', 'OK', 'LOW', 'EMPTY']).optional(),
+    tonerStatus: z.enum(['UNKNOWN', 'OK', 'LOW', 'EMPTY']).optional(),
+    errorMessage: z.string().optional(),
+  }).optional(),
+});
+
+router.post('/station-ready', agentAuth, validate(stationReadySchema), async (req: Request, res: Response) => {
+  try {
+    const { stationId, isReady, printerStatus } = req.body;
+
+    await prisma.station.update({
+      where: { id: stationId },
+      data: {
+        isReady,
+        lastHeartbeatAt: new Date(),
+      },
+    });
+
+    // Update printer status if provided
+    if (printerStatus) {
+      const printer = await prisma.printer.findFirst({ where: { stationId } });
+      if (printer) {
+        await prisma.printer.update({
+          where: { id: printer.id },
+          data: {
+            isOnline: printerStatus.status !== 'OFFLINE',
+            currentState: printerStatus.status,
+            paperStatus: printerStatus.paperStatus || 'UNKNOWN',
+            tonerStatus: printerStatus.tonerStatus || 'UNKNOWN',
+            lastSeenAt: new Date(),
+          },
+        });
+      }
+    }
+
+    res.json({ success: true, data: { stationId, isReady } });
+  } catch (error) {
+    throw error;
+  }
+});
+
+// Pre-payment check: customer app queries station readiness before showing payment button
+router.get('/station/:stationId/readiness', async (req: Request, res: Response) => {
+  try {
+    const { stationId } = req.params;
+
+    const station = await prisma.station.findUnique({
+      where: { id: stationId },
+      include: { printers: true },
+    });
+
+    if (!station) {
+      res.status(404).json({ success: false, error: 'Station not found' });
+      return;
+    }
+
+    // Consider station offline if no heartbeat in last 2 minutes
+    const twoMinutesAgo = new Date(Date.now() - 2 * 60 * 1000);
+    const isOnline = station.lastHeartbeatAt && station.lastHeartbeatAt > twoMinutesAgo;
+
+    // Check if any printer has a blocking error
+    const hasBlockingError = station.printers.some((p: any) =>
+      p.currentState === 'ERROR' || p.currentState === 'OFFLINE'
+    );
+
+    const hasPaperEmpty = station.printers.some((p: any) =>
+      p.paperStatus === 'EMPTY'
+    );
+
+    const ready = station.isReady && isOnline && !hasBlockingError && !hasPaperEmpty;
+
+    let blockingReason = '';
+    if (!isOnline) blockingReason = 'Station is offline';
+    else if (hasPaperEmpty) blockingReason = 'Printer is out of paper';
+    else if (hasBlockingError) blockingReason = 'Printer has a hardware error';
+
+    res.json({
+      success: true,
+      data: {
+        ready,
+        isOnline,
+        hasBlockingError,
+        hasPaperEmpty,
+        blockingReason,
+        printers: station.printers.map((p: any) => ({
+          name: p.name,
+          status: p.currentState,
+          paperStatus: p.paperStatus,
+          tonerStatus: p.tonerStatus,
+        })),
+      },
+    });
+  } catch (error) {
+    throw error;
+  }
+});
+
 export default router;
