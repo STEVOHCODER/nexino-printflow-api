@@ -195,7 +195,23 @@ router.post('/auto-register', agentAuth, agentLimiter, validate(autoRegisterSche
 
 router.post('/heartbeat', agentAuth, agentLimiter, validate(heartbeatSchema), async (req: Request, res: Response) => {
   try {
-    const { agentId, printers } = req.body;
+    const { agentId, stationId, printers } = req.body;
+
+    // Update station heartbeat timestamp to prevent offline watchdog
+    if (stationId) {
+      try {
+        const printerStatus = printers[0];
+        await prisma.station.update({
+          where: { id: stationId },
+          data: {
+            lastHeartbeatAt: new Date(),
+            isReady: printerStatus?.status !== 'OFFLINE',
+          },
+        });
+      } catch (error) {
+        console.error(`Failed to update station ${stationId}:`, error);
+      }
+    }
 
     for (const printerUpdate of printers) {
       try {
